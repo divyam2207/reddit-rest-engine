@@ -1,0 +1,141 @@
+syntax = "proto3";
+
+package reddit;
+
+option go_package = "./proto";
+
+// Messages for User Management
+message RegisterUserRequest {
+  string username = 1;
+}
+
+message RegisterUserResponse {
+  string message = 1;
+}
+
+// Messages for Subreddit Management
+message CreateSubredditRequest {
+  string name = 1;
+}
+
+message CreateSubredditResponse {
+  string message = 1;
+}
+
+message JoinSubredditRequest {
+  string subreddit = 1;
+  string username = 2;
+}
+
+message JoinSubredditResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message LeaveSubredditRequest {
+  string subreddit = 1;
+  string username = 2;
+}
+
+message LeaveSubredditResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// Messages for Posts
+message PostRequest {
+  string subreddit = 1;
+  string author = 2;
+  string content = 3;
+}
+
+message PostResponse {
+  string message = 1;
+}
+
+// Messages for Comments
+message CommentRequest {
+  string subreddit = 1;
+  int32 post_id = 2;
+  int32 parent_comment_id = 3;
+  string author = 4;
+  string content = 5;
+}
+
+message CommentResponse {
+  string message = 1;
+}
+
+// Messages for Upvotes and Downvotes
+message UpvotePostRequest {
+  string subreddit = 1;
+  int32 post_id = 2;
+  string username = 3;
+}
+
+message UpvotePostResponse {
+  string message = 1;
+}
+
+message DownvotePostRequest {
+  string subreddit = 1;
+  int32 post_id = 2;
+  string username = 3;
+}
+
+message DownvotePostResponse {
+  string message = 1;
+}
+
+// Messages for Direct Messages
+message DirectMessageRequest {
+  string from = 1;
+  string to = 2;
+  string content = 3;
+}
+
+message DirectMessageResponse {
+  string message = 1;
+}
+
+// Subreddit State Fetch
+message FetchSubredditStateRequest {
+  string name = 1;
+}
+
+message FetchSubredditStateResponse {
+  string name = 1;
+  repeated string members = 2;
+  repeated Post posts = 3;
+}
+
+// Common Structures
+message Post {
+  int32 id = 1;
+  string author = 2;
+  string content = 3;
+  int32 upvotes = 4;
+  int32 downvotes = 5;
+  repeated Comment comments = 6;
+}
+
+message Comment {
+  int32 id = 1;
+  string author = 2;
+  string content = 3;
+  repeated Comment replies = 4;
+}
+
+// Service Declaration (Optional, for gRPC compatibility)
+service RedditEngine {
+  rpc RegisterUser(RegisterUserRequest) returns (RegisterUserResponse);
+  rpc CreateSubreddit(CreateSubredditRequest) returns (CreateSubredditResponse);
+  rpc JoinSubreddit(JoinSubredditRequest) returns (JoinSubredditResponse);
+  rpc LeaveSubreddit(LeaveSubredditRequest) returns (LeaveSubredditResponse);
+  rpc Post(PostRequest) returns (PostResponse);
+  rpc Comment(CommentRequest) returns (CommentResponse);
+  rpc UpvotePost(UpvotePostRequest) returns (UpvotePostResponse);
+  rpc DownvotePost(DownvotePostRequest) returns (DownvotePostResponse);
+  rpc FetchSubredditState(FetchSubredditStateRequest) returns (FetchSubredditStateResponse);
+  rpc ReplyToDirectMessage(DirectMessageRequest) returns (DirectMessageResponse);
+}
