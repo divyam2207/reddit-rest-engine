@@ -5,7 +5,7 @@
 - Divyam Dubey
 -  Kratik Patel 
 
-### Youtube Link:  https://www.youtube.com/(url)
+### Youtube Link:  https://youtu.be/1y66GZYYv2o
 
 ## Project Overview
 This project is a simple Reddit clone built using **Go**, **Proto.Actor**, and **Gin**. It demonstrates actor-based concurrency using RESTful API to efficiently handle user interactions with posts, comments, and subreddits via REST endpoints. The system includes features like user registration, post creation, voting, and subreddit management and finally state management.
