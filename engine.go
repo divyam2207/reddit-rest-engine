@@ -1,343 +1,430 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
-	"sync"
-	"log"
-	"strconv"
+	"time"
+
+	pb "reddit-clone/proto" // Import the Protobuf package
+
+	"github.com/asynkron/protoactor-go/actor"
 	"github.com/gin-gonic/gin"
-	pb "reddit-clone/proto"
-	
 )
 
-// Shared data structures
-var (
-	users      = make(map[string]*User)
-	subreddits = make(map[string]*Subreddit)
-	mu         sync.Mutex
-)
+// UserActor handles user-specific actions
+type UserActor struct {
+	username string
+}
 
-// Internal data models
-type User struct {
+// SubredditActor handles subreddit-specific actions
+type SubredditActor struct {
+	name    string
+	members map[string]bool
+	posts   []*pb.Post
+}
+
+// Messages for UserActor and SubredditActor
+type RegisterUserMessage struct {
 	Username string
-	Karma    int
-	Inbox []pb.DirectMessageRequest
-
 }
 
-type Subreddit struct {
-	Name    string
-	Members map[string]bool
-	Posts   []*pb.Post
+type JoinMessage struct {
+	Username string
 }
 
-// REST Handlers
-
-// Register a new user
-func registerUser(c *gin.Context) {
-	var req pb.RegisterUserRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
-		return
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	if _, exists := users[req.Username]; exists {
-		c.JSON(http.StatusConflict, gin.H{"message": "User already exists"})
-		return
-	}
-	users[req.Username] = &User{Username: req.Username, Karma: 0, Inbox: []pb.DirectMessageRequest{}}
-	c.JSON(http.StatusOK, pb.RegisterUserResponse{Message: "User registered"})
+type PostMessage struct {
+	Author  string
+	Content string
 }
 
-// Create a new subreddit
-func createSubreddit(c *gin.Context) {
-	var req pb.CreateSubredditRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
-		return
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	if _, exists := subreddits[req.Name]; exists {
-		c.JSON(http.StatusConflict, gin.H{"message": "Subreddit already exists"})
-		return
-	}
-	subreddits[req.Name] = &Subreddit{
-		Name:    req.Name,
-		Members: make(map[string]bool),
-		Posts:   []*pb.Post{},
-	}
-	log.Printf("Current subreddits: %v", subreddits)
-	c.JSON(http.StatusOK, pb.CreateSubredditResponse{Message: "Subreddit created"})
+type CommentMessage struct {
+	PostID  int32
+	Author  string
+	Content string
 }
 
-// Reply to a direct message
-func replyToDirectMessage(c *gin.Context) {
-	var req pb.DirectMessageRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
-		return
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	recipient, exists := users[req.To]
-	if !exists {
-		c.JSON(http.StatusNotFound, pb.DirectMessageResponse{Message: "Recipient not found"})
-		return
-	}
-
-	recipient.Inbox = append(recipient.Inbox, pb.DirectMessageRequest{
-		From:    req.From,
-		To:      req.To,
-		Content: req.Content,
-	})
-	
-	c.JSON(http.StatusOK, pb.DirectMessageResponse{Message: "Reply sent successfully"})
+type VoteMessage struct {
+	PostID   int32
+	Username string
+	Upvote   bool
 }
 
-// Join a subreddit
-func joinSubreddit(c *gin.Context) {
-	var req pb.JoinSubredditRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
-		return
+type FetchSubredditStateMessage struct{}
+
+// Receive processes messages for UserActor
+func (u *UserActor) Receive(ctx actor.Context) {
+	switch msg := ctx.Message().(type) {
+	case *actor.Started:
+		// Handle actor started lifecycle message
+		fmt.Printf("UserActor for user '%s' started\n", u.username)
+	case *RegisterUserMessage:
+		fmt.Printf("User registered: %s\n", msg.Username)
+		ctx.Respond(fmt.Sprintf("User %s registered successfully", msg.Username))
+	default:
+		fmt.Printf("Unhandled message in UserActor: %+v of type %T\n", msg, msg)
 	}
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	subredditName := c.Param("name")
-	subreddit, exists := subreddits[subredditName]
-	if !exists {
-		c.JSON(http.StatusNotFound, pb.JoinSubredditResponse{Success: false, Message: "Subreddit not found"})
-		return
-	}
-
-	if _, alreadyMember := subreddit.Members[req.Username]; alreadyMember {
-		c.JSON(http.StatusConflict, pb.JoinSubredditResponse{Success: false, Message: "User is already a member"})
-		return
-	}
-
-	subreddit.Members[req.Username] = true
-	c.JSON(http.StatusOK, pb.JoinSubredditResponse{Success: true, Message: "Joined subreddit successfully"})
 }
 
-// Post to a subreddit
-func postToSubreddit(c *gin.Context) {
-	var req pb.PostRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
-		return
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	subredditName := c.Param("name")
-	subreddit, exists := subreddits[subredditName]
-	if !exists {
-		c.JSON(http.StatusNotFound, pb.PostResponse{Message: "Subreddit not found"})
-		return
-	}
-
-	post := &pb.Post{
-		Id:      int32(len(subreddit.Posts) + 1),
-		Author:  req.Author,
-		Content: req.Content,
-	}
-	subreddit.Posts = append(subreddit.Posts, post)
-	c.JSON(http.StatusOK, pb.PostResponse{Message: "Post created"})
-}
-
-// Comment on a post
-func commentOnPost(c *gin.Context) {
-	var req pb.CommentRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
-		return
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	
-	subredditName := c.Param("name")
-	subreddit, exists := subreddits[subredditName]
-	if !exists {
-		c.JSON(http.StatusNotFound, pb.CommentResponse{Message: "Subreddit not found"})
-		return
-	}
-
-	postId_param := c.Param("postId")
-	postId_conv, err := strconv.ParseInt(postId_param, 10, 32)
-	if err == nil {
-		for _, post := range subreddit.Posts {
-			if post.Id == int32(postId_conv) {
+// Receive processes messages for SubredditActor
+func (s *SubredditActor) Receive(ctx actor.Context) {
+	switch msg := ctx.Message().(type) {
+	case *actor.Started:
+		// Handle actor started lifecycle message
+		fmt.Printf("SubredditActor for subreddit '%s' started\n", s.name)
+	case *pb.CreateSubredditRequest:
+		fmt.Printf("Subreddit created: %s\n", msg.Name)
+		ctx.Respond(&pb.CreateSubredditResponse{
+			Message: fmt.Sprintf("Subreddit %s created successfully", msg.Name),
+		})
+	case *JoinMessage:
+		if s.members[msg.Username] {
+			ctx.Respond(fmt.Sprintf("User %s is already a member of subreddit %s", msg.Username, s.name))
+			return
+		}
+		s.members[msg.Username] = true
+		ctx.Respond(fmt.Sprintf("User %s joined subreddit %s successfully", msg.Username, s.name))
+	case *pb.PostRequest:
+		post := &pb.Post{
+			Id:      int32(len(s.posts) + 1),
+			Author:  msg.Author,
+			Content: msg.Content,
+		}
+		s.posts = append(s.posts, post)
+		ctx.Respond(&pb.PostResponse{
+			Message: fmt.Sprintf("Post created successfully by %s in subreddit %s", msg.Author, s.name),
+		})
+	case *CommentMessage:
+		for _, post := range s.posts {
+			if post.Id == msg.PostID {
+				// Add comment to the post
 				comment := &pb.Comment{
 					Id:      int32(len(post.Comments) + 1),
-					Author:  req.Author,
-					Content: req.Content,
+					Author:  msg.Author,
+					Content: msg.Content,
 				}
-				if req.ParentCommentId == 0 {
-					post.Comments = append(post.Comments, comment)
+				post.Comments = append(post.Comments, comment)
+				ctx.Respond(&pb.CommentResponse{
+					Message: fmt.Sprintf("Comment added by %s on post %d in subreddit %s", msg.Author, msg.PostID, s.name),
+				})
+				return
+			}
+		}
+		ctx.Respond(&pb.CommentResponse{
+			Message: "Post not found",
+		})
+	case *VoteMessage:
+		for _, post := range s.posts {
+			if post.Id == msg.PostID {
+				if msg.Upvote {
+					post.Upvotes++
+					ctx.Respond(&pb.VoteResponse{
+						Message: fmt.Sprintf("Upvote registered by %s on post %d in subreddit %s", msg.Username, msg.PostID, s.name),
+					})
+					fmt.Printf("Upvote registered by %s on post %d in subreddit %s\n", msg.Username, msg.PostID, s.name)
 				} else {
-					for _, parent := range post.Comments {
-						if parent.Id == req.ParentCommentId {
-							parent.Replies = append(parent.Replies, comment)
-						}
-					}
+					post.Downvotes++
+					ctx.Respond(&pb.VoteResponse{
+						Message: fmt.Sprintf("Downvote registered by %s on post %d in subreddit %s", msg.Username, msg.PostID, s.name),
+					})
+					fmt.Printf("Downvote registered by %s on post %d in subreddit %s\n", msg.Username, msg.PostID, s.name)
 				}
-				c.JSON(http.StatusOK, pb.CommentResponse{Message: "Comment added"})
 				return
 			}
 		}
+		// If post is not found
+		ctx.Respond(&pb.VoteResponse{
+			Message: fmt.Sprintf("Post %d not found in subreddit %s", msg.PostID, s.name),
+		})
+		fmt.Printf("Vote failed: Post %d not found in subreddit %s\n", msg.PostID, s.name)
+
+	case *FetchSubredditStateMessage:
+		// Gather members
+		members := make([]string, 0, len(s.members))
+		for member := range s.members {
+			members = append(members, member)
+		}
+
+		// Respond with subreddit state
+		ctx.Respond(&pb.FetchSubredditStateResponse{
+			Name:    s.name,
+			Members: members,
+			Posts:   s.posts,
+		})
+
+	default:
+		fmt.Printf("Unhandled message in SubredditActor: %+v of type %T\n", msg, msg)
 	}
-	
-	c.JSON(http.StatusNotFound, pb.CommentResponse{Message: "Post not found"})
 }
 
-// Upvote a post
-func upvotePost(c *gin.Context) {
-	var req pb.UpvotePostRequest
+// Global variables
+var (
+	system          *actor.ActorSystem
+	userActors      = make(map[string]*actor.PID)
+	subredditActors = make(map[string]*actor.PID)
+)
+
+func init() {
+	system = actor.NewActorSystem()
+}
+
+// REST handler to register a user
+func registerUser(c *gin.Context) {
+	var req pb.RegisterUserRequest
+
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 		return
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
-
-	subredditName := c.Param("name")
-	subreddit, exists := subreddits[subredditName]
-	if !exists {
-		c.JSON(http.StatusNotFound, pb.UpvotePostResponse{Message: "Subreddit not found"})
+	if _, exists := userActors[req.Username]; exists {
+		c.JSON(http.StatusConflict, gin.H{"error": "User already exists"})
 		return
 	}
 
-	postId_param := c.Param("postId")
-	postId_conv, err := strconv.ParseInt(postId_param, 10, 32)
-	if err == nil {
-		for _, post := range subreddit.Posts {
-			if post.Id == int32(postId_conv) {
-				post.Upvotes++
-				c.JSON(http.StatusOK, pb.UpvotePostResponse{Message: "Upvote successful"})
-				return
-			}
-		}
+	props := actor.PropsFromProducer(func() actor.Actor {
+		return &UserActor{username: req.Username}
+	})
+	rootContext := actor.NewRootContext(system, nil)
+	pid := rootContext.Spawn(props)
+	userActors[req.Username] = pid
+
+	future := rootContext.RequestFuture(pid, &RegisterUserMessage{Username: req.Username}, 5*time.Second)
+	result, err := future.Result()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to register user"})
+		return
 	}
-	c.JSON(http.StatusNotFound, pb.UpvotePostResponse{Message: "Post not found"})
+
+	c.JSON(http.StatusOK, gin.H{"response": result})
 }
 
-// Leave a subreddit
-func leaveSubreddit(c *gin.Context) {
-	var req pb.LeaveSubredditRequest
+// REST handler to create a subreddit
+func createSubreddit(c *gin.Context) {
+	var req pb.CreateSubredditRequest
+
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 		return
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
-
-	// Retrieve the subreddit
-	subredditName := c.Param("name")
-	subreddit, exists := subreddits[subredditName]
-	if !exists {
-		c.JSON(http.StatusNotFound, pb.LeaveSubredditResponse{Success: false, Message: "Subreddit not found"})
+	if _, exists := subredditActors[req.Name]; exists {
+		c.JSON(http.StatusConflict, gin.H{"error": "Subreddit already exists"})
 		return
 	}
 
-	// Check if the user is a member
-	if _, isMember := subreddit.Members[req.Username]; !isMember {
-		c.JSON(http.StatusConflict, pb.LeaveSubredditResponse{Success: false, Message: "User is not a member of the subreddit"})
+	props := actor.PropsFromProducer(func() actor.Actor {
+		return &SubredditActor{
+			name:    req.Name,
+			members: make(map[string]bool),
+			posts:   []*pb.Post{},
+		}
+	})
+	rootContext := actor.NewRootContext(system, nil)
+	pid := rootContext.Spawn(props)
+	subredditActors[req.Name] = pid
+
+	future := rootContext.RequestFuture(pid, &req, 5*time.Second)
+	result, err := future.Result()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create subreddit"})
 		return
 	}
 
-	// Remove the user from the subreddit
-	delete(subreddit.Members, req.Username)
-	c.JSON(http.StatusOK, pb.LeaveSubredditResponse{Success: true, Message: "Left subreddit successfully"})
+	resp := result.(*pb.CreateSubredditResponse)
+	c.JSON(http.StatusOK, gin.H{"response": resp.Message})
 }
 
-// Downvote a post
-func downvotePost(c *gin.Context) {
-	var req pb.DownvotePostRequest
+// REST handler to join a subreddit
+func joinSubreddit(c *gin.Context) {
+	subredditName := c.Param("name")
+	var req pb.JoinSubredditRequest
+
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 		return
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
-	
-	subredditName := c.Param("name")
-	subreddit, exists := subreddits[subredditName]
-	if !exists {
-		c.JSON(http.StatusNotFound, pb.DownvotePostResponse{Message: "Subreddit not found"})
+	if _, exists := userActors[req.Username]; !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found. Please register first."})
 		return
 	}
 
-	postId_param := c.Param("postId")
-	postId_conv, err := strconv.ParseInt(postId_param, 10, 32)
-	if err == nil {
-		for _, post := range subreddit.Posts {
-			if post.Id == int32(postId_conv) {
-				post.Downvotes++
-				c.JSON(http.StatusOK, pb.DownvotePostResponse{Message: "Downvote successful"})
-				return
-			}
-		}
-	}
-	
-	c.JSON(http.StatusNotFound, pb.DownvotePostResponse{Message: "Post not found"})
-}
-
-// Fetch subreddit state
-func fetchSubredditState(c *gin.Context) {
-	subredditName := c.Param("name")
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	subreddit, exists := subreddits[subredditName]
+	pid, exists := subredditActors[subredditName]
 	if !exists {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Subreddit not found"})
 		return
 	}
 
-	var members []string
-	for member := range subreddit.Members {
-		members = append(members, member)
+	rootContext := actor.NewRootContext(system, nil)
+	future := rootContext.RequestFuture(pid, &JoinMessage{Username: req.Username}, 5*time.Second)
+	result, err := future.Result()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to join subreddit"})
+		return
 	}
 
-	c.JSON(http.StatusOK, pb.FetchSubredditStateResponse{
-		Name:    subreddit.Name,
-		Members: members,
-		Posts:   subreddit.Posts,
+	c.JSON(http.StatusOK, gin.H{"response": result})
+}
+
+// REST handler to post to a subreddit
+func postToSubreddit(c *gin.Context) {
+	var req pb.PostRequest
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		return
+	}
+
+	if _, exists := userActors[req.Author]; !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found. Please register first."})
+		return
+	}
+
+	pid, exists := subredditActors[req.Subreddit]
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Subreddit not found"})
+		return
+	}
+
+	rootContext := actor.NewRootContext(system, nil)
+	future := rootContext.RequestFuture(pid, &req, 5*time.Second)
+	result, err := future.Result()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to post"})
+		return
+	}
+
+	resp := result.(*pb.PostResponse)
+	c.JSON(http.StatusOK, gin.H{"response": resp.Message})
+}
+
+func commentOnPost(c *gin.Context) {
+	var req pb.CommentRequest
+
+	// Bind the JSON request body to the Protobuf message
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		return
+	}
+
+	// Validate if the user exists
+	if _, exists := userActors[req.Author]; !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found. Please register first."})
+		return
+	}
+
+	// Validate if the subreddit exists
+	pid, exists := subredditActors[req.Subreddit]
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Subreddit not found"})
+		return
+	}
+
+	// Send a CommentMessage to the SubredditActor
+	rootContext := actor.NewRootContext(system, nil)
+	future := rootContext.RequestFuture(pid, &CommentMessage{
+		PostID:  req.PostId,
+		Author:  req.Author,
+		Content: req.Content,
+	}, 5*time.Second)
+
+	result, err := future.Result()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to comment"})
+		return
+	}
+
+	// Parse the Protobuf response
+	resp := result.(*pb.CommentResponse)
+	c.JSON(http.StatusOK, gin.H{"response": resp.Message})
+}
+
+func voteOnPost(c *gin.Context, upvote bool) {
+	var req pb.VoteRequest
+
+	// Bind the JSON request body to the Protobuf message
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		return
+	}
+
+	// Validate if the user exists
+	if _, exists := userActors[req.Username]; !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found. Please register first."})
+		return
+	}
+
+	// Validate if the subreddit exists
+	pid, exists := subredditActors[req.Subreddit]
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Subreddit not found"})
+		return
+	}
+
+	// Send a VoteMessage to the SubredditActor
+	rootContext := actor.NewRootContext(system, nil)
+	future := rootContext.RequestFuture(pid, &VoteMessage{
+		PostID:   req.PostId,
+		Username: req.Username,
+		Upvote:   upvote,
+	}, 5*time.Second)
+
+	result, err := future.Result()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to vote on post"})
+		return
+	}
+
+	// Parse the Protobuf response
+	resp := result.(*pb.VoteResponse)
+	c.JSON(http.StatusOK, gin.H{"response": resp.Message})
+}
+
+func fetchSubredditState(c *gin.Context) {
+	subredditName := c.Param("name")
+
+	// Validate if the subreddit exists
+	pid, exists := subredditActors[subredditName]
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Subreddit not found"})
+		return
+	}
+
+	// Send FetchSubredditStateMessage to the SubredditActor
+	rootContext := actor.NewRootContext(system, nil)
+	future := rootContext.RequestFuture(pid, &FetchSubredditStateMessage{}, 5*time.Second)
+	result, err := future.Result()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch subreddit state"})
+		return
+	}
+
+	// Parse the Protobuf response
+	resp := result.(*pb.FetchSubredditStateResponse)
+	c.JSON(http.StatusOK, gin.H{
+		"name":    resp.Name,
+		"members": resp.Members,
+		"posts":   resp.Posts,
 	})
 }
 
-// Main function to run the server
 func main() {
 	r := gin.Default()
-
-	// Define routes
-	r.POST("/users", registerUser)
-	r.POST("/subreddits", createSubreddit)
+	r.POST("/users/register", registerUser)
+	r.POST("/subreddits/create", createSubreddit)
 	r.POST("/subreddits/:name/join", joinSubreddit)
-	r.POST("/subreddits/:name/leave", leaveSubreddit)
 	r.POST("/subreddits/:name/posts", postToSubreddit)
 	r.POST("/subreddits/:name/posts/:postId/comments", commentOnPost)
-	r.POST("/subreddits/:name/posts/:postId/upvote", upvotePost)
-	r.POST("/subreddits/:name/posts/:postId/downvote", downvotePost)
-	r.POST("/messages/reply", replyToDirectMessage)
+	r.POST("/subreddits/:name/posts/:postId/upvote", func(c *gin.Context) {
+		voteOnPost(c, true)
+	})
+	r.POST("/subreddits/:name/posts/:postId/downvote", func(c *gin.Context) {
+		voteOnPost(c, false)
+	})
 	r.GET("/subreddits/:name/state", fetchSubredditState)
 
-	// Start the server
-	r.Run(":8080") // Run on port 8080
+	// r.Run(":8080")
+
+	// running on the local wifi address
+	r.Run("0.0.0.0:8080")
 }

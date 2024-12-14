@@ -28,18 +28,7 @@ message JoinSubredditRequest {
 }
 
 message JoinSubredditResponse {
-  bool success = 1;
-  string message = 2;
-}
-
-message LeaveSubredditRequest {
-  string subreddit = 1;
-  string username = 2;
-}
-
-message LeaveSubredditResponse {
-  bool success = 1;
-  string message = 2;
+  string message = 1;
 }
 
 // Messages for Posts
@@ -57,48 +46,27 @@ message PostResponse {
 message CommentRequest {
   string subreddit = 1;
   int32 post_id = 2;
-  int32 parent_comment_id = 3;
-  string author = 4;
-  string content = 5;
+  string author = 3;
+  string content = 4;
 }
 
 message CommentResponse {
   string message = 1;
 }
 
-// Messages for Upvotes and Downvotes
-message UpvotePostRequest {
+// Messages for Voting
+message VoteRequest {
   string subreddit = 1;
   int32 post_id = 2;
   string username = 3;
+  bool upvote = 4;
 }
 
-message UpvotePostResponse {
+message VoteResponse {
   string message = 1;
 }
 
-message DownvotePostRequest {
-  string subreddit = 1;
-  int32 post_id = 2;
-  string username = 3;
-}
-
-message DownvotePostResponse {
-  string message = 1;
-}
-
-// Messages for Direct Messages
-message DirectMessageRequest {
-  string from = 1;
-  string to = 2;
-  string content = 3;
-}
-
-message DirectMessageResponse {
-  string message = 1;
-}
-
-// Subreddit State Fetch
+// Messages for Subreddit State
 message FetchSubredditStateRequest {
   string name = 1;
 }
@@ -107,6 +75,17 @@ message FetchSubredditStateResponse {
   string name = 1;
   repeated string members = 2;
   repeated Post posts = 3;
+}
+
+// Messages for Direct Messaging
+message DirectMessageRequest {
+  string from = 1;
+  string to = 2;
+  string content = 3;
+}
+
+message DirectMessageResponse {
+  string message = 1;
 }
 
 // Common Structures
@@ -123,19 +102,16 @@ message Comment {
   int32 id = 1;
   string author = 2;
   string content = 3;
-  repeated Comment replies = 4;
 }
 
-// Service Declaration (Optional, for gRPC compatibility)
+// Service Declaration (for reference, even though Proto.Actor is used)
 service RedditEngine {
   rpc RegisterUser(RegisterUserRequest) returns (RegisterUserResponse);
   rpc CreateSubreddit(CreateSubredditRequest) returns (CreateSubredditResponse);
   rpc JoinSubreddit(JoinSubredditRequest) returns (JoinSubredditResponse);
-  rpc LeaveSubreddit(LeaveSubredditRequest) returns (LeaveSubredditResponse);
   rpc Post(PostRequest) returns (PostResponse);
   rpc Comment(CommentRequest) returns (CommentResponse);
-  rpc UpvotePost(UpvotePostRequest) returns (UpvotePostResponse);
-  rpc DownvotePost(DownvotePostRequest) returns (DownvotePostResponse);
+  rpc Vote(VoteRequest) returns (VoteResponse);
   rpc FetchSubredditState(FetchSubredditStateRequest) returns (FetchSubredditStateResponse);
-  rpc ReplyToDirectMessage(DirectMessageRequest) returns (DirectMessageResponse);
+  rpc SendDirectMessage(DirectMessageRequest) returns (DirectMessageResponse);
 }
